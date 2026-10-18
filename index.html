@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Bar POS Trainer</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+    <link href="style.css" rel="stylesheet">
+</head>
+    <body>
+    <div id="app"></div><div id="m" class="ov" hidden></div><div id="t"></div>
+    <script>
+        // 1) Vlož své údaje ze Supabase (Project Settings > API)
+        const SB_URL='VLOZ_PROJECT_URL',SB_KEY='VLOZ_ANON_KEY';
+
+        const sb=supabase.createClient(SB_URL,SB_KEY);
+        const $=s=>document.querySelector(s);
+        const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+        const K=n=>Math.round(Number(n))+' Kč';
+        const SEC=['Alko drinky','Shoty','Nealko drinky','Lodě'];
+        const MODS={'Alko drinky':[['Bez ledu',0],['Citron',0],['Dvojitý',40]],'Nealko drinky':[['Bez ledu',0],['Citron',0],['Sirup',5]]};
+        let S={tok:null,user:null,menu:[],sec:SEC[0],items:[],sel:-1,place:'Bar',disc:0,pw:'',pay:{}};
+
+        function toast(m,ok){const t=$('#t');t.textContent=m;t.className=ok?'ok show':'show';setTimeout(()=>t.className=ok?'ok':'',2600)}
+        async function rpc(fn,a){const{data,error}=await sb.rpc(fn,a);if(error){toast(error.message);throw error}return data}
+        function modal(h){$('#m').innerHTML='<div class="box">'+h+'</div>';$('#m').hidden=false}
+        function closeM(){$('#m').hidden=true;$('#m').innerHTML=''}
+
+    /* ---------- Přihlášení ---------- */
+    function loginView(){$('#app').innerHTML=`<div class="login"><h1>Bar POS</h1><div class="dots">${'●'.repeat(S.pw.length)||'&nbsp;'}</div>
+<div class="pad">${[1,2,3,4,5,6,7,8,9,'C',0,'OK'].map(k=>`<button class="${k=='OK'?'ac':''}" onclick="key('${k}')">${k}</button>`).join('')}</div>
+<small>Zadej své heslo a potvrď OK</small></div>`}
+    async function key(k){
+        if(k=='C')S.pw='';
+        else if(k=='OK'){
+            if(S.pw.length<5)return toast('Heslo má 5 až 8 číslic');
+            const pw=S.pw;S.pw='';
+            const r=await rpc('login',{p_pass:pw});
+            if(!r){toast('Špatné heslo');return loginView()}
+            S.tok=r.token;S.user=r;S.menu=await rpc('menu',{t:S.tok});S.items=[];S.disc=0;S.sel=-1;return posView();
+        }else if(S.pw.length<8)S.pw+=k;
+        loginView();
+    }
+    document.addEventListener('keydown',e=>{if(S.tok||!$('#m').hidden)return;
+        if(/^[0-9]$/.test(e.key))key(e.key);else if(e.key=='Enter')key('OK');else if(e.key=='Backspace')key('C')});
+    function logout(){S={...S,tok:null,user:null,items:[],pw:''};closeM();loginView()}
+
+    /* ---------- Pokladna ---------- */
+    function sums(){const sub=S.items.reduce((a,i)=>a+i.price*i.qty,0);return{sub,tot:Math.round(sub*(1-S.disc/100))}}
+    function posView(){const{sub,tot}=sums(),mg=S.user.role=='manager';
+        $('#app').innerHTML=`<div class="pos">
+<header><b>${esc(S.user.name)} <small>${mg?'manažer':'staff'}</small></b><span>Místo: <b>${esc(S.place)}</b></span><button onclick="logout()">Odhlásit</button></header>
+<nav>${SEC.map(s=>`<button class="${s==S.sec?'ac':''}" onclick="S.sec='${s}';posView()">${s}</button>`).join('')}</nav>
+<main>${S.menu.filter(p=>p.section==S.sec).map(p=>`<button class="tile" onclick="add('${p.id}')"><b>${esc(p.name)}</b><span>${K(p.price)}</span></button>`).join('')||'<p class="mu">V téhle sekci zatím nic není.</p>'}</main>
+<aside><div class="lines">${S.items.map((i,x)=>`<div class="ln ${x==S.sel?'sel':''}" onclick="S.sel=${x};posView()"><span>${i.qty}× ${esc(i.name)}<small>${esc(i.note)}</small></span><span>${K(i.price*i.qty)}</span></div>`).join('')||'<p class="mu">Účet je prázdný. Vyber drink vlevo.</p>'}</div>
+<div class="qty"><button onclick="qty(1)">＋</button><button onclick="qty(-1)">－</button></div>
+<div class="tot">${S.disc?`<div>Sleva ${S.disc} %</div>`:''}<div class="mu">Mezisoučet ${K(sub)}</div><h2>${K(tot)}</h2></div></aside>
+<footer><button onclick="placeM()">Místo</button><button ${mg?'':'disabled title="Jen manažer"'} onclick="discM()">Sleva</button>
+<button onclick="voidM(0)">Storno položky</button><button onclick="voidM(1)">Storno účtu</button><button onclick="recM()">Recepty</button>
+${mg?'<button onclick="mgrM()">Manažer</button>':''}<button class="ok" onclick="payM()">Platba</button></footer></div>`}
+
+    function push(p,note,extra){const pr=Number(p.price)+extra;let f=S.items.find(i=>i.id==p.id&&i.note==note);
+        if(f)f.qty++;else S.items.push({id:p.id,name:p.name,price:pr,qty:1,note});
+        S.sel=S.items.findIndex(i=>i.id==p.id&&i.note==note);posView()}
+    function add(id){const p=S.menu.find(x=>x.id==id),m=MODS[p.section];if(!m)return push(p,'',0);
+        modal(`<h3>${esc(p.name)}</h3>${m.map(([n,c],i)=>`<label class="chk"><input type="checkbox" value="${i}"> ${n}${c?` (+${c} Kč)`:''}</label>`).join('')}
+  <div class="row"><button onclick="closeM()">Zrušit</button><button class="ac" onclick="addM('${id}')">Přidat</button></div>`)}
+    function addM(id){const p=S.menu.find(x=>x.id==id),m=MODS[p.section],c=[...document.querySelectorAll('#m input:checked')].map(e=>m[e.value]);
+        closeM();push(p,c.map(x=>x[0]).join(', '),c.reduce((a,x)=>a+x[1],0))}
+    function qty(d){if(S.sel<0)return toast('Vyber položku v účtu');const i=S.items[S.sel];i.qty+=d;if(i.qty<1){S.items.splice(S.sel,1);S.sel=-1}posView()}
+
+    function placeM(){modal(`<h3>Místo</h3><div class="row">${['Bar','Terasa',...[1,2,3,4,5,6,7,8].map(n=>'Stůl '+n)].map(p=>`<button class="${p==S.place?'ac':''}" onclick="S.place='${p}';closeM();posView()">${p}</button>`).join('')}</div>`)}
+    function discM(){modal(`<h3>Sleva</h3><div class="row">${[0,10,15,20,25,50,100].map(d=>`<button class="${d==S.disc?'ac':''}" onclick="S.disc=${d};closeM();posView()">${d?d+' %':'Bez slevy'}</button>`).join('')}</div>`)}
+
+    /* ---------- Storno ---------- */
+    function voidM(all){if(!S.items.length)return toast('Účet je prázdný');if(!all&&S.sel<0)return toast('Vyber položku v účtu');
+        modal(`<h3>${all?'Storno účtu':'Storno: '+esc(S.items[S.sel].name)}</h3>
+  <select id="rs">${['Chyba obsluhy','Rozbité','Reklamace','Host změnil názor'].map(r=>`<option>${r}</option>`).join('')}</select>
+  ${S.user.role=='staff'?'<input id="mp" type="password" inputmode="numeric" placeholder="Heslo manažera ke schválení">':''}
+  <div class="row"><button onclick="closeM()">Zpět</button><button class="bad" onclick="doVoid(${all})">Stornovat</button></div>`)}
+    async function doVoid(all){const i=S.items[S.sel],item=all?'Celý účet':i.name+(i.note?' ('+i.note+')':'');
+        await rpc('void_log',{t:S.tok,p_mgr:$('#mp')?.value||'',p_item:item,p_reason:$('#rs').value});
+        if(all)S.items=[];else S.items.splice(S.sel,1);S.sel=-1;closeM();toast('Stornováno',1);posView()}
+
+    /* ---------- Platba ---------- */
+    function payM(){if(!S.items.length)return toast('Účet je prázdný');S.pay={m:'Hotovost',tip:0,given:0};payR()}
+    function payR(){const{tot}=sums(),p=S.pay,due=tot+p.tip,ch=p.given-due;
+        modal(`<h3>K úhradě ${K(tot)}</h3>
+  <div class="row">${['Hotovost','Karta'].map(m=>`<button class="${p.m==m?'ac':''}" onclick="S.pay.m='${m}';payR()">${m}</button>`).join('')}</div>
+  <div class="row"><small>Spropitné</small>${[0,10,20,50].map(t=>`<button class="${p.tip==t?'ac':''}" onclick="S.pay.tip=${t};payR()">${t} Kč</button>`).join('')}</div>
+  ${p.m=='Hotovost'?`<div class="row">${[['Přesně',due],['100',100],['200',200],['500',500],['1000',1000]].map(([l,v])=>`<button onclick="S.pay.given=${v};payR()">${l}</button>`).join('')}</div>
+  <p>Dáno ${K(p.given)} · Vrátit <b>${ch>=0?K(ch):'—'}</b></p>`:''}
+  <div class="row"><button onclick="closeM()">Zpět</button><button class="ok" ${p.m=='Hotovost'&&ch<0?'disabled':''} onclick="doPay()">Zaplatit ${K(due)}</button></div>`)}
+    async function doPay(){const{tot}=sums();
+        await rpc('save_order',{t:S.tok,o:{place:S.place,discount:S.disc,tip:S.pay.tip,pay:S.pay.m,total:tot,items:S.items}});
+        S.items=[];S.disc=0;S.sel=-1;closeM();toast('Zaplaceno',1);posView()}
+
+    /* ---------- Recepty ---------- */
+    function recM(){modal(`<h3>Recepty</h3><input id="q" placeholder="Hledat drink…" oninput="recL()"><div id="rl"></div><div class="row"><button onclick="closeM()">Zavřít</button></div>`);recL()}
+    function recL(){const q=($('#q').value||'').toLowerCase();
+        $('#rl').innerHTML=S.menu.filter(p=>p.name.toLowerCase().includes(q)).map(p=>`<button class="li" onclick="recD('${p.id}')">${esc(p.name)}<small>${p.section}</small></button>`).join('')}
+    function recD(id){const p=S.menu.find(x=>x.id==id),ls=s=>(s||'').split(';').filter(x=>x.trim()).map(x=>`<li>${esc(x.trim())}</li>`).join('');
+        modal(`<h3>${esc(p.name)}</h3><p class="mu">Sklenice: ${esc(p.glass||'–')} · příprava: ${esc(p.method||'–')}</p>
+  <h4>Suroviny</h4><ul>${ls(p.ingredients)}</ul><h4>Postup</h4><ol>${ls(p.steps)}</ol>
+  <div class="row"><button onclick="recM()">Zpět na seznam</button><button onclick="closeM()">Zavřít</button></div>`)}
+
+    /* ---------- Manažer ---------- */
+    async function mgrM(tab='rep'){let b='';
+        if(tab=='rep'){const r=await rpc('report',{t:S.tok});
+            b=`<p>Dnes: <b>${K(r.total)}</b> · účtů ${r.count} · spropitné ${K(r.tips)} · storen ${r.voids}</p>`+r.by_staff.map(s=>`<div class="ln"><span>${esc(s.name)} <small>${s.count} účtů</small></span><b>${K(s.total)}</b></div>`).join('')}
+        if(tab=='stf'){const l=await rpc('staff_list',{t:S.tok});
+            b=l.map(s=>`<div class="ln"><span>${esc(s.name)} <small>${s.role=='manager'?'manažer':'staff'}</small></span><button class="bad" onclick="stfDel('${s.id}')">Smazat</button></div>`).join('')+
+                `<div class="form"><input id="sn" placeholder="Jméno"><select id="sr"><option value="staff">staff</option><option value="manager">manažer</option></select><input id="sp" inputmode="numeric" placeholder="Heslo (5 až 8 číslic, unikátní)"><button class="ac" onclick="stfAdd()">Přidat člověka</button></div>`}
+        if(tab=='mnu'){
+            b=S.menu.map(p=>`<div class="ln"><span>${esc(p.name)} <small>${p.section} · ${K(p.price)}</small></span><button class="bad" onclick="prDel('${p.id}')">Smazat</button></div>`).join('')+
+                `<div class="form"><small>Existující název se přepíše, nový se přidá.</small><input id="pn" placeholder="Název"><select id="ps">${SEC.map(s=>`<option>${s}</option>`).join('')}</select><input id="pp" type="number" placeholder="Cena v Kč">
+    <input id="pg" placeholder="Sklenice"><input id="pm" placeholder="Příprava (Build, Shake…)"><textarea id="pi" placeholder="Suroviny, oddělené středníkem"></textarea><textarea id="pt" placeholder="Postup, kroky oddělené středníkem"></textarea><button class="ac" onclick="prSave()">Uložit drink</button></div>`}
+        modal(`<div class="row">${[['rep','Uzávěrka'],['stf','Personál'],['mnu','Menu']].map(([k,l])=>`<button class="${k==tab?'ac':''}" onclick="mgrM('${k}')">${l}</button>`).join('')}</div>${b}<div class="row"><button onclick="closeM()">Zavřít</button></div>`)}
+    async function stfAdd(){await rpc('staff_add',{t:S.tok,p_name:$('#sn').value.trim(),p_role:$('#sr').value,p_pass:$('#sp').value});toast('Přidáno',1);mgrM('stf')}
+    async function stfDel(id){await rpc('staff_del',{t:S.tok,p_id:id});mgrM('stf')}
+    async function prSave(){const v=i=>$('#'+i).value.trim();if(!v('pn')||!v('pp'))return toast('Vyplň název a cenu');
+        await rpc('product_save',{t:S.tok,p:{name:v('pn'),section:v('ps'),price:v('pp'),glass:v('pg'),method:v('pm'),ingredients:v('pi'),steps:v('pt')}});
+        S.menu=await rpc('menu',{t:S.tok});posView();toast('Uloženo',1);mgrM('mnu')}
+    async function prDel(id){await rpc('product_del',{t:S.tok,p_id:id});S.menu=await rpc('menu',{t:S.tok});posView();mgrM('mnu')}
+
+    loginView();
+</script>
+    </body>
+</html>
