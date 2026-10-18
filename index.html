@@ -1,29 +1,71 @@
 <!DOCTYPE html>
-<html lang="cs">
-<head>
-    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Bar POS Trainer</title>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-    <link href="style.css" rel="stylesheet">
-</head>
-    <body>
-    <div id="app"></div><div id="m" class="ov" hidden></div><div id="t"></div>
-    <script>
-        // 1) Vlož své údaje ze Supabase (Project Settings > API)
-        const SB_URL='VLOZ_PROJECT_URL',SB_KEY='VLOZ_ANON_KEY';
+    <style>
+        *{box-sizing:border-box}[hidden]{display:none!important}
+        body{margin:0;height:100vh;overflow:hidden;background:#1f3680;color:#fff;font:600 14px Arial,Helvetica,sans-serif}
+        #app{height:100%}button,input,select,textarea{font:inherit}
+        button{color:#0b4bb5;background:#ccc;border:3px outset #e8e8e8;padding:6px;cursor:pointer}
+        button:active{border-style:inset}button:disabled{opacity:.45;cursor:not-allowed}
+        button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #ffd400;outline-offset:1px}
+        .ac{background:#1e90ff;color:#fff;border-color:#6bb8ff}.ok{background:#2eb85c;color:#fff;border-color:#7fe0a0}.bad{background:#d23b2e;color:#fff;border-color:#f08a80}
+        .mu,small{color:#a9b8e6}
 
-        const sb=supabase.createClient(SB_URL,SB_KEY);
-        const $=s=>document.querySelector(s);
-        const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-        const K=n=>Math.round(Number(n))+' Kč';
-        const SEC=['Alko drinky','Shoty','Nealko drinky','Lodě'];
-        const MODS={'Alko drinky':[['Bez ledu',0],['Citron',0],['Dvojitý',40]],'Nealko drinky':[['Bez ledu',0],['Citron',0],['Sirup',5]]};
-        let S={tok:null,user:null,menu:[],sec:SEC[0],items:[],sel:-1,place:'Bar',disc:0,pw:'',pay:{}};
+        /* Přihlášení */
+        .login{display:grid;align-content:center;height:100%;gap:14px;text-align:center;width:min(320px,90%);margin:auto}
+        .login h1{margin:0;font-size:34px}.dots{font:30px 'Courier New',monospace;letter-spacing:10px;height:44px;color:#ffd400}
+        .pad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.pad button{padding:18px;font-size:24px}
 
-        function toast(m,ok){const t=$('#t');t.textContent=m;t.className=ok?'ok show':'show';setTimeout(()=>t.className=ok?'ok':'',2600)}
-        async function rpc(fn,a){const{data,error}=await sb.rpc(fn,a);if(error){toast(error.message);throw error}return data}
-        function modal(h){$('#m').innerHTML='<div class="box">'+h+'</div>';$('#m').hidden=false}
-        function closeM(){$('#m').hidden=true;$('#m').innerHTML=''}
+        /* Pokladna přes celou obrazovku */
+        .pos{display:grid;grid-template-columns:160px 1fr 300px 100px;height:100%}
+        nav{background:#faffa5;border-left:9px solid #000;padding:12px;display:flex;flex-direction:column;gap:12px;overflow:auto}
+        nav button{height:64px;background:#1f3a8f;color:#fff;border:3px outset #3b55b5;font-size:15px}
+        nav button.ac{background:#1e90ff;border:3px solid #000}
+        main{padding:10px 14px;display:grid;grid-template-columns:repeat(auto-fill,88px);grid-auto-rows:88px;gap:14px;align-content:start;overflow:auto}
+        .tile{display:flex;flex-direction:column;justify-content:space-between;padding:6px;font-size:13px;line-height:1.15;text-align:center}.tile small{color:#555}
+        .rc{background:#0b0b6b;padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-height:0;border-left:3px solid #000d8a}
+        .rh{font:15px 'Courier New',monospace}
+        .rlist{flex:1;background:#fff;color:#000;overflow:auto;font:15px 'Courier New',monospace;min-height:0}
+        .rl{display:flex;justify-content:space-between;gap:6px;padding:2px 6px;cursor:pointer}.rl.hd{background:#1e90ff;cursor:default}.rl.sel{background:#b4ffb4}
+        .nt{padding:0 6px 0 24px;color:#8a3b2a;font:14px 'Courier New',monospace}
+        .tt{background:#000;padding:4px 8px;font:19px 'Courier New',monospace}.tt div{display:flex;justify-content:space-between}.sub{color:#1fbf1f}
+        .qr{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:6px}.qr button{height:52px;font-weight:700}.qr .q{color:#0a8a2a}.ar{color:#d41b1b;font-size:26px;line-height:1}
+        .side{display:flex;flex-direction:column;gap:6px;padding:6px 4px 6px 6px}
+        .side button{flex:1;background:#fff;text-transform:uppercase;font-size:13px;font-weight:700;border-color:#f4f4f4 #bbb #bbb #f4f4f4}
+        .side .ok{background:#2eb85c}
+
+        /* Okna */
+        .ov{position:fixed;inset:0;background:#000b;display:grid;place-items:center;padding:12px}
+        .box{background:#16286a;border:3px outset #5b79d6;padding:18px;width:min(470px,100%);max-height:90vh;overflow:auto;display:flex;flex-direction:column;gap:10px}
+        .box h3,.box h4{margin:0}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row button{flex:1;padding:12px}
+        input,select,textarea{color:#000;background:#fff;border:2px inset #999;padding:10px;width:100%}
+        .chk{display:flex;gap:8px;align-items:center;padding:8px}.chk input{width:auto}
+        .ln{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 4px}.ln small{display:block}
+        .li{display:flex;justify-content:space-between;width:100%;margin-bottom:6px}.form{display:grid;gap:8px}
+        #t{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#d23b2e;padding:10px 18px;opacity:0;transition:.2s;pointer-events:none;z-index:9}
+        #t.ok{background:#2eb85c}#t.show{opacity:1}
+        @media(max-width:800px){.pos{grid-template-columns:1fr;grid-template-rows:auto 1fr 300px auto;overflow:auto}
+            nav{flex-direction:row;border-left:0;padding:8px}nav button{height:48px;flex:none;padding:0 12px}
+            .side{flex-direction:row;flex-wrap:wrap}.side button{min-height:48px;flex:1 0 30%}}
+    </style></head><body>
+<div id="app"></div><div id="m" class="ov" hidden></div><div id="t"></div>
+<script>
+    // 1) Vlož své údaje ze Supabase (Project Settings > API)
+    const SB_URL='https://extavobdbatohszhyken.supabase.co',SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV4dGF2b2JkYmF0b2hzemh5a2VuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIzNDU3NjAsImV4cCI6MjEwNzkyMTc2MH0.V7NLeZiyZI3vSRj4edh-3x0rw6QCVmBOfbqMBj4LowE';
+
+    const sb=supabase.createClient(SB_URL,SB_KEY);
+    const $=s=>document.querySelector(s);
+    const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const K=n=>Math.round(Number(n))+' Kč';
+    const SEC=['Alko drinky','Shoty','Nealko drinky','Lodě'];
+    const MODS={'Alko drinky':[['Bez ledu',0],['Citron',0],['Dvojitý',40]],'Nealko drinky':[['Bez ledu',0],['Citron',0],['Sirup',5]]};
+    let S={tok:null,user:null,menu:[],sec:SEC[0],items:[],sel:-1,place:'Bar',disc:0,pw:'',pay:{}};
+
+    function toast(m,ok){const t=$('#t');t.textContent=m;t.className=ok?'ok show':'show';setTimeout(()=>t.className=ok?'ok':'',2600)}
+    async function rpc(fn,a){const{data,error}=await sb.rpc(fn,a);if(error){toast(error.message);throw error}return data}
+    function modal(h){$('#m').innerHTML='<div class="box">'+h+'</div>';$('#m').hidden=false}
+    function closeM(){$('#m').hidden=true;$('#m').innerHTML=''}
 
     /* ---------- Přihlášení ---------- */
     function loginView(){$('#app').innerHTML=`<div class="login"><h1>Bar POS</h1><div class="dots">${'●'.repeat(S.pw.length)||'&nbsp;'}</div>
@@ -48,15 +90,16 @@
     function sums(){const sub=S.items.reduce((a,i)=>a+i.price*i.qty,0);return{sub,tot:Math.round(sub*(1-S.disc/100))}}
     function posView(){const{sub,tot}=sums(),mg=S.user.role=='manager';
         $('#app').innerHTML=`<div class="pos">
-<header><b>${esc(S.user.name)} <small>${mg?'manažer':'staff'}</small></b><span>Místo: <b>${esc(S.place)}</b></span><button onclick="logout()">Odhlásit</button></header>
 <nav>${SEC.map(s=>`<button class="${s==S.sec?'ac':''}" onclick="S.sec='${s}';posView()">${s}</button>`).join('')}</nav>
-<main>${S.menu.filter(p=>p.section==S.sec).map(p=>`<button class="tile" onclick="add('${p.id}')"><b>${esc(p.name)}</b><span>${K(p.price)}</span></button>`).join('')||'<p class="mu">V téhle sekci zatím nic není.</p>'}</main>
-<aside><div class="lines">${S.items.map((i,x)=>`<div class="ln ${x==S.sel?'sel':''}" onclick="S.sel=${x};posView()"><span>${i.qty}× ${esc(i.name)}<small>${esc(i.note)}</small></span><span>${K(i.price*i.qty)}</span></div>`).join('')||'<p class="mu">Účet je prázdný. Vyber drink vlevo.</p>'}</div>
-<div class="qty"><button onclick="qty(1)">＋</button><button onclick="qty(-1)">－</button></div>
-<div class="tot">${S.disc?`<div>Sleva ${S.disc} %</div>`:''}<div class="mu">Mezisoučet ${K(sub)}</div><h2>${K(tot)}</h2></div></aside>
-<footer><button onclick="placeM()">Místo</button><button ${mg?'':'disabled title="Jen manažer"'} onclick="discM()">Sleva</button>
+<main>${S.menu.filter(p=>p.section==S.sec).map(p=>`<button class="tile" onclick="add('${p.id}')"><span>${esc(p.name)}</span><small>${K(p.price)}</small></button>`).join('')||'<p class="mu">V téhle sekci zatím nic není.</p>'}</main>
+<div class="rc"><div class="rh">*${esc(S.place)}</div>
+<div class="rlist"><div class="rl hd"><span>${esc(S.user.name.toUpperCase())}</span><span>${mg?'MGR':'REG'} 1</span></div>
+${S.items.map((i,x)=>`<div class="rl ${x==S.sel?'sel':''}" onclick="S.sel=${x};posView()"><span>${i.qty} ${esc(i.name.toUpperCase())}</span><span>${Math.round(i.price*i.qty)}</span></div>${i.note?`<div class="nt">${esc(i.note.toUpperCase())}</div>`:''}`).join('')}</div>
+<div class="tt">${S.disc?`<div><span>Sleva ${S.disc} %</span></div>`:''}<div class="sub"><span>Sub:</span><span>${K(sub)}</span></div><div><span>Tot:</span><span>${K(tot)}</span></div></div>
+<div class="qr"><button class="ar" onclick="qty(1)">▲</button><button class="q" disabled>MNOŽSTVÍ</button><button class="ar" onclick="qty(-1)">▼</button></div></div>
+<div class="side"><button onclick="placeM()">Místo</button><button ${mg?'':'disabled title="Jen manažer"'} onclick="discM()">Sleva</button>
 <button onclick="voidM(0)">Storno položky</button><button onclick="voidM(1)">Storno účtu</button><button onclick="recM()">Recepty</button>
-${mg?'<button onclick="mgrM()">Manažer</button>':''}<button class="ok" onclick="payM()">Platba</button></footer></div>`}
+${mg?'<button onclick="mgrM()">Manažer</button>':''}<button onclick="logout()">Odhlásit</button><button class="ok" onclick="payM()">Platba</button></div></div>`}
 
     function push(p,note,extra){const pr=Number(p.price)+extra;let f=S.items.find(i=>i.id==p.id&&i.note==note);
         if(f)f.qty++;else S.items.push({id:p.id,name:p.name,price:pr,qty:1,note});
@@ -123,6 +166,4 @@ ${mg?'<button onclick="mgrM()">Manažer</button>':''}<button class="ok" onclick=
     async function prDel(id){await rpc('product_del',{t:S.tok,p_id:id});S.menu=await rpc('menu',{t:S.tok});posView();mgrM('mnu')}
 
     loginView();
-</script>
-    </body>
-</html>
+</script></body></html>
